@@ -5,6 +5,27 @@ const SERVICE_API_KEY =
 
 const stripTrailingSlash = (value: string) => value.replace(/\/+$/, "");
 
+const MIME_PREFERENCE_ORDER = [
+  "audio/webm;codecs=opus",
+  "audio/webm",
+  "audio/ogg;codecs=opus",
+  "audio/ogg",
+  "audio/mp4;codecs=opus",
+  "audio/mp4"
+] as const;
+
+const getSupportedMimeType = (): string | undefined => {
+  if (typeof MediaRecorder === "undefined" || !MediaRecorder.isTypeSupported) {
+    return undefined;
+  }
+  for (const candidate of MIME_PREFERENCE_ORDER) {
+    if (MediaRecorder.isTypeSupported(candidate)) {
+      return candidate;
+    }
+  }
+  return undefined;
+};
+
 const resolveApiBase = () => {
   const envBase = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.trim();
   if (envBase) {
@@ -170,14 +191,22 @@ const MicRecorder: React.FC<MicRecorderProps> = ({ onVoiceTagsChange, onSpeaking
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
 
-      const params = new URLSearchParams({ service_api_key: SERVICE_API_KEY });
+      const mimeType = getSupportedMimeType();
+      const params = new URLSearchParams({
+        service_api_key: SERVICE_API_KEY
+      });
+      if (mimeType) {
+        params.set("mime_type", mimeType);
+      }
+
       const wsUrl = buildWebSocketUrl("/api/whisper", params);
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
       ws.onopen = () => {
         setStatus("已連線 Whisper，準備錄音...");
-        const recorder = new MediaRecorder(stream, { mimeType: "audio/webm" });
+        const recorderOptions = mimeType ? { mimeType } : undefined;
+        const recorder = new MediaRecorder(stream, recorderOptions);
         recorderRef.current = recorder;
 
         recorder.addEventListener("dataavailable", async (event) => {

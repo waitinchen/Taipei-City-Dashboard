@@ -16,6 +16,18 @@ OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 WHISPER_MODEL = os.getenv("WHISPER_MODEL", "whisper-1")
 SERVICE_API_KEY = os.getenv("SERVICE_API_KEY")
 CHUNK_THRESHOLD = 4  # number of MediaRecorder chunks (~2-4 seconds)
+DEFAULT_MIME_TYPE = "audio/webm"
+
+MIME_SUFFIX_MAP = {
+    "audio/webm": ".webm",
+    "audio/webm;codecs=opus": ".webm",
+    "audio/ogg": ".ogg",
+    "audio/ogg;codecs=opus": ".ogg",
+    "audio/mp4": ".m4a",
+    "audio/mp4;codecs=opus": ".m4a",
+    "audio/mpeg": ".mp3",
+    "audio/mp3": ".mp3",
+}
 
 logger = logging.getLogger("voice_agent")
 
@@ -40,12 +52,12 @@ def _verify_service_key(websocket: WebSocket) -> bool:
     return True
 
 
-async def _transcribe_chunks(chunks: List[bytes]) -> str:
+async def _transcribe_chunks(chunks: List[bytes], file_suffix: str) -> str:
     """Persist chunks to a temp file and call Whisper transcription."""
     if not client:
         raise RuntimeError("OPENAI_API_KEY is not configured")
 
-    with tempfile.NamedTemporaryFile(delete=False, suffix=".webm") as tmp_file:
+    with tempfile.NamedTemporaryFile(delete=False, suffix=file_suffix) as tmp_file:
         for chunk in chunks:
             tmp_file.write(chunk)
         temp_path = Path(tmp_file.name)
@@ -69,6 +81,9 @@ async def whisper_websocket(websocket: WebSocket):
     if not _verify_service_key(websocket):
         await websocket.close(code=status.WS_1008_POLICY_VIOLATION)
         return
+
+    mime_type = websocket.query_params.get("mime_type", DEFAULT_MIME_TYPE)
+    file_suffix = MIME_SUFFIX_MAP.get(mime_type, ".webm")
 
     await websocket.accept()
 
@@ -95,7 +110,7 @@ async def whisper_websocket(websocket: WebSocket):
 
                 if len(audio_chunks) >= CHUNK_THRESHOLD:
                     try:
-                        text = await _transcribe_chunks(audio_chunks)
+                        text = await _transcribe_chunks(audio_chunks, file_suffix)
                         await websocket.send_json({"type": "final", "text": text})
                     except Exception as exc:  # noqa: BLE001
                         logger.error("whisper transcribe failed", exc_info=exc)
@@ -111,7 +126,7 @@ async def whisper_websocket(websocket: WebSocket):
     finally:
         if audio_chunks:
             try:
-                text = await _transcribe_chunks(audio_chunks)
+                text = await _transcribe_chunks(audio_chunks, file_suffix)
                 await websocket.send_json({"type": "final", "text": text})
             except Exception:
                 pass
